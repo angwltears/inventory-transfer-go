@@ -102,17 +102,25 @@ func (s *Store) SetQuantity(ctx context.Context, db querier, sku, location strin
 	return err
 }
 
+// fully rewrited MoveStock to avoid read-modift-write pattern
 func (s *Store) MoveStock(ctx context.Context, db querier, sku, from, to string, quantity int) error {
-	source, err := s.Quantity(ctx, db, sku, from)
+	loc1, loc2 := from, to
+	qty1, qty2 := -quantity, quantity
+
+	if loc1 > loc2 {
+		loc1, loc2 = loc2, loc1
+		qty1, qty2 = qty2, qty1
+	}
+
+	_, err := db.Exec(ctx,
+		"UPDATE inventory SET quantity = quantity + $1, updated_at = now() WHERE sku = $2 AND location = $3",
+		qty1, sku, loc1)
 	if err != nil {
 		return err
 	}
-	target, err := s.Quantity(ctx, db, sku, to)
-	if err != nil {
-		return err
-	}
-	if err := s.SetQuantity(ctx, db, sku, from, source-quantity); err != nil {
-		return err
-	}
-	return s.SetQuantity(ctx, db, sku, to, target+quantity)
+
+	_, err = db.Exec(ctx,
+		"UPDATE inventory SET quantity = quantity + $1, updated_at = now() WHERE sku = $2 AND location = $3",
+		qty2, sku, loc2)
+	return err
 }

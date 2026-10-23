@@ -77,6 +77,7 @@ func (h *Handler) transfer(w http.ResponseWriter, r *http.Request) {
 		internalError(w, r, err)
 		return
 	}
+	defer conn.Release() // added: grants a guarantee of returning connection to the pool
 
 	levels, err := h.store.StockLevels(ctx, conn, req.SKU)
 	if err != nil {
@@ -107,12 +108,22 @@ func (h *Handler) transfer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("insufficient stock at %s: available %d, requested %d", req.FromLocation, available, req.Quantity))
 		return
 	}
-
-	if err := h.store.MoveStock(ctx, conn, req.SKU, req.FromLocation, req.ToLocation, req.Quantity); err != nil {
+	tx, err := conn.Begin(ctx)
+	if err != nil {
 		internalError(w, r, err)
 		return
 	}
-	conn.Release()
+	defer tx.Rollback(ctx)
+	// providing tx instead of conn
+	if err := h.store.MoveStock(ctx, tx, req.SKU, req.FromLocation, req.ToLocation, req.Quantity); err != nil {
+		internalError(w, r, err)
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		internalError(w, r, err)
+		return
+	}
+	// moved conn.Release() to the start of the handler
 
 	writeJSON(w, http.StatusOK, TransferResponse{
 		Status:       "COMPLETED",
